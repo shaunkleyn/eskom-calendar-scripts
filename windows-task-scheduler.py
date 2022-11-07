@@ -13,6 +13,8 @@ import re
 url = "https://github.com/beyarkay/eskom-calendar/releases/download/latest/gauteng-ekurhuleni-block-3.ics"
 calendar = Calendar(requests.get(url).text)
 
+
+
 # TODO Delete this
 # Loop through events to test
 for event in calendar.events:
@@ -20,16 +22,54 @@ for event in calendar.events:
         print(str(event.begin) + ' to ' + str(event.end))
 
 
-# TODO Delete all past / expired events
 
+# Windows Task Scheduler
+scheduler = win32com.client.Dispatch('Schedule.Service')
+scheduler.Connect()
+root_folder = scheduler.GetFolder('\\')
+
+# TODO Delete all past / expired events
+folders = [scheduler.GetFolder('\\')]
+while folders:
+    folder = folders.pop(0)
+    folders += list(folder.GetFolders(0))
+    for task in folder.GetTasks(0):
+        print('Name       : %s' % task.Name)
+        print('Path       : %s' % task.Path)
+        print('Last Run   : %s' % task.LastRunTime)
+        print('Last Result: %s' % task.LastTaskResult)
+        match = re.search('LoadShedding(_[0-9]{8}-[0-9]{4})', task.Name)
+        if match:
+            taskNamePart = str.split(task.Name, '_')[1]
+            taskDate = datetime.strptime(taskNamePart, '%Y%m%d-%H%M')
+            if taskDate.timestamp() < datetime.now().timestamp():
+                folder.DeleteTask(task.Name, 0)
 # TODO Create tasks for future events
 
 # TODO Delete any event that no longer has a calendar entry
 
 
-# Windows Task Scheduler
-scheduler = win32com.client.Dispatch('Schedule.Service')
-scheduler.Connect()
+
+
+def getOldTasks():
+    #scheduler.Connect()
+    folders = [scheduler.GetFolder('\\')]
+    while folders:
+        folder = folders.pop(0)
+        folders += list(folder.GetFolders(0))
+        for task in folder.GetTasks(0):
+            print('Name       : %s' % task.Name)
+            print('Path       : %s' % task.Path)
+            print('Last Run   : %s' % task.LastRunTime)
+            print('Last Result: %s' % task.LastTaskResult)
+            match = re.search('LoadShedding(_[0-9]{8}-[0-9]{4})', task.Name)
+            if match:
+                taskNamePart = str.split(task.Name, '_')[1]
+                taskDate = datetime.strptime(taskNamePart, '%Y%m%d-%H%M')
+                if taskDate.timestamp() < datetime.now().timestamp():
+                    folder.DeleteTask(task.Name, 0)
+
+
 
 folders = [scheduler.GetFolder('\\')]
 while folders:
@@ -50,20 +90,6 @@ while folders:
                 f = scheduler.GetFolder(task.Path)
                 f.DeleteTask(task.Name, 0)
 
-
-
-def getOldTasks():
-    #scheduler.Connect()
-    folders = [scheduler.GetFolder('\\')]
-    while folders:
-        folder = folders.pop(0)
-        folders += list(folder.GetFolders(0))
-        for task in folder.GetTasks(0):
-            print('Name       : %s' % task.Name)
-            print('Path       : %s' % task.Path)
-            print('Last Run   : %s' % task.LastRunTime)
-            print('Last Result: %s' % task.LastTaskResult)
-            
 
 
 
