@@ -11,14 +11,20 @@ import re
 
 # Retrieve the calendar
 url = "https://github.com/beyarkay/eskom-calendar/releases/download/latest/gauteng-ekurhuleni-block-3.ics"
-cal = Calendar(requests.get(url).text)
+calendar = Calendar(requests.get(url).text)
 
 # TODO Delete this
 # Loop through events to test
-for event in cal.events:
+for event in calendar.events:
     if event.begin.timestamp() > datetime.now().timestamp():
         print(str(event.begin) + ' to ' + str(event.end))
 
+
+# TODO Delete all past / expired events
+
+# TODO Create tasks for future events
+
+# TODO Delete any event that no longer has a calendar entry
 
 
 # Windows Task Scheduler
