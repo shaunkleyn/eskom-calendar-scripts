@@ -1,2 +1,2 @@
-# eskom-task-scheduler
-Create scheduled tasks based on the Eskom calendars by @beyarkay
+# eskom-calendar-scripts
+Various scripts to use with the Eskom calendars provided by @beyarkay
