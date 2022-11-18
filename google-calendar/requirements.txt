@@ -1,0 +1,4 @@
+google_api_python_client==2.66.0
+google_auth_oauthlib==0.7.1
+pandas==1.5.1
+protobuf==4.21.9
