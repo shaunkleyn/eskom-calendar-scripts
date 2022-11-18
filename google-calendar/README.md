@@ -10,6 +10,8 @@ You would have to enable the Google Calendar API in a Google Cloud project to be
 - Inserts future load-shedding events that are in the csv file but not in your calendar.
 - Deletes future events that are in your calendar but not in the csv file. Sometimes (ughm *seldom*) Eskom would reduce the load-shedding stage.  This will result in some future schedules being changed / removed.  
 
-## How to use
+## How to use it
+- Clone the repo or [download](https://github.com/shaunkleyn/eskom-calendar-scripts/archive/refs/heads/main.zip) it as a zip package and extract it to wherever you want
+- Open the destination folder and type ```cmd``` in the address bar to open the command prompt
 - Install the required packages by running ```pip install -r requirements.txt```
 - Create a scheduled task in Windows to run the script at a preferred interval so that it can update your Google calendar.  See this for more info on how to run a Python script using Windows Task Scheduler: https://www.jcchouinard.com/python-automation-using-task-scheduler/
