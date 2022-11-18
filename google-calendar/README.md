@@ -13,5 +13,7 @@ You would have to enable the Google Calendar API in a Google Cloud project to be
 ## How to use it
 - Clone the repo or [download](https://github.com/shaunkleyn/eskom-calendar-scripts/archive/refs/heads/main.zip) it as a zip package and extract it to wherever you want
 - Open the destination folder and type ```cmd``` in the address bar to open the command prompt
-- Install the required packages by running ```pip install -r requirements.txt```
+- Create a virtual environment by running ```python -m venv gc-venv``` (this keeps the script's packages and its runtime environment totally separate from your host machine’s environment)
+- Activate the virtual environment using ```.\gc-venv\Scripts\activate```
+- Install the required packages by running ```python -m pip install -r requirements.txt```
 - Create a scheduled task in Windows to run the script at a preferred interval so that it can update your Google calendar.  See this for more info on how to run a Python script using Windows Task Scheduler: https://www.jcchouinard.com/python-automation-using-task-scheduler/
