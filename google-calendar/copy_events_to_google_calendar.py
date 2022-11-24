@@ -24,6 +24,7 @@ import datetime
 import os.path
 import pandas as pd
 import configparser
+import logging
 
 # You need to enable Google Calendar API in a Google Cloud project: see this 
 #       https://developers.google.com/calendar/api/quickstart/python
@@ -37,6 +38,24 @@ config.read('configuration.ini')
 url = config['EskomCalendar']['csv_url']
 area_name = config['EskomCalendar']['area_name']
 calendar_name = config['GoogleCalendar']['calendar_name']
+
+logging.basicConfig(filename='log.txt', encoding='utf-8', level=logging.DEBUG, format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
+# create logger
+logger = logging.getLogger('')
+logger.setLevel(logging.DEBUG)
+
+# create console handler and set level to debug
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+
+# create formatter
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# add formatter to ch
+ch.setFormatter(formatter)
+
+# add ch to logger
+logger.addHandler(ch)
 
 def main():
     """Shows basic usage of the Google Calendar API.
@@ -56,7 +75,8 @@ def main():
             creds.refresh(Request())
         else:
             if not os.path.exists('credentials.json'):
-                print ('Please download your credentials file from Google Cloud and place it in the same directory as this script')
+                # print ('Please download your credentials file from Google Cloud and place it in the same directory as this script')
+                logger.error('Please download your credentials file from Google Cloud and place it in the same directory as this script')
                 sys.exit()
                 
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
@@ -66,7 +86,7 @@ def main():
             token.write(creds.to_json())
 
     try:
-        print('Starting...')
+        logger.debug('Starting...')
         service = build('calendar', 'v3', credentials=creds)
 
         # Call the Calendar API
@@ -79,14 +99,14 @@ def main():
 
         # Find the load shedding calendar ID
         if calendar_name != '' and (calendar_id is None or calendar_id == ''):
-            print('Finding calendar ID for ' + calendar_name)
+            logger.debug('Finding calendar ID for ' + calendar_name)
             page_token = None
             while True:
                 calendar_list = service.calendarList().list(pageToken=page_token).execute()
                 for calendar_list_entry in calendar_list['items']:
                     if calendar_list_entry['summary'] == calendar_name:
                         calendar_id = calendar_list_entry['id']
-                        print('Using calendar: ' + calendar_name)
+                        logger.debug('Using calendar: ' + calendar_name)
 
                         # Add the ID to the config
                         config["GoogleCalendar"].update({"calendar_id":calendar_list_entry['id']})
@@ -102,10 +122,12 @@ def main():
         else:
             if calendar_id == '':
                 calendar_id = 'primary'
-                print('Using primary calendar as default')
+                logger.debug('Using primary calendar as default')
 
         # Get all future events to prevent inserting duplicate calendar entries
         if calendar_id != '':
+            last_run = config['GoogleCalendar'].get('last_run')
+
             df = pd.read_csv(url, delimiter = ',', names = ['area_name', 'start', 'finsh', 'stage', 'source'])
             filter1 = df[df.area_name==area_name]
             events_result = service.events().list(calendarId=calendar_id, timeMin=now,
@@ -120,7 +142,7 @@ def main():
                     calendarEvents[calendarEventDate] = event['id']
 
             # loop through CSV items and create future events if it doesn't already exist
-            print('Looking for new events to add...')
+            logger.debug('Looking for new events to add...')
             for index, row in filter1.iterrows():
                 csvEventDate = pd.to_datetime(row['start'])
                 csvEventDates.append(csvEventDate)
@@ -136,16 +158,17 @@ def main():
 
                         event = service.events().insert(calendarId=calendar_id, body=event).execute()
                         calendarEventDates.append(pd.to_datetime(row['start']))
-                        print('Event created: %s' % (event.get('htmlLink')))
+                        logger.info('Event created for: %s', row['start'])
+                        logger.info('Event created: %s' % (event.get('htmlLink')))
 
             # Loop though calendar events and remove the events that are no longer in the csv events list
-            print('Looking for events that should be deleted...')
+            logger.debug('Looking for events that should be deleted...')
             for key, value in calendarEvents.items():
                 if pd.to_datetime(key) not in csvEventDates:
-                    print('Event deleted for ' + key)
+                    logger.info('Event deleted for ' + key)
                     service.events().delete(calendarId=calendar_id, eventId=value).execute()
 
-        print('Complete!')
+        logger.debug('Complete!')
     except HttpError as error:
         print('An error occurred: %s' % error)
 
