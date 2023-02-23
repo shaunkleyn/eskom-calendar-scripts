@@ -1,17 +1,19 @@
-import datetime
+
 import win32com.client
 # imports
 from datetime import datetime, timedelta
 from pathlib import Path
 import os
 import pytz
-from ics import Calendar
+from ics import Calendar, Event
 import requests
 import re
 import icalendar
 import configparser
 import pathlib
 import logging
+import pytz
+from dateutil.tz import gettz
 
 #python -m venv venv
 #Windows: venv\Scripts\activate
@@ -22,21 +24,8 @@ import logging
 #pip install requests
 #pip install icalendar
 
-
-
-config_path = pathlib.Path(__file__).parent.absolute() / "config.ini"
-config = configparser.ConfigParser()
-config.read(config_path)
-
-
-
-tasks_folder_name = config['TaskScheduler']['tasks_folder']
-calendar_url = config['TaskScheduler']['calendar_url']
-task_program_path = config['TaskScheduler']['task_program_path']
-task_program_arguments = config['TaskScheduler']['task_program_arguments']
-
-
-logging.basicConfig(filename='log.txt', encoding='utf-8', level=logging.DEBUG, format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
+log_path = os.path.join(str(pathlib.Path(__file__).parent.absolute()), str(os.path.basename(__file__).replace('.py', '.log')))
+logging.basicConfig(filename=log_path, encoding='utf-8', level=logging.DEBUG, format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
 # create logger
 logger = logging.getLogger('')
 logger.setLevel(logging.DEBUG)
@@ -56,6 +45,20 @@ logger.addHandler(ch)
 
 
 
+#config
+config_path = pathlib.Path(__file__).parent.absolute() / "config.ini"
+logger.info(f'using config: "{str(config_path)}"')
+config = configparser.ConfigParser()
+config.read(config_path)
+
+
+tasks_folder_name = config['TaskScheduler']['tasks_folder']
+calendar_url = config['TaskScheduler']['calendar_url']
+task_program_path = config['TaskScheduler']['task_program_path']
+task_program_arguments = config['TaskScheduler']['task_program_arguments']
+
+
+
 # Windows Task Scheduler
 scheduler = win32com.client.Dispatch('Schedule.Service')
 scheduler.Connect()
@@ -67,7 +70,7 @@ while folders:
     folder = folders.pop(0)
     folders += list(folder.GetFolders(0))
     for task in folder.GetTasks(0):
-        print('Name       : %s' % task.Name)
+        logger.info('Name       : %s' % task.Name)
         print('Path       : %s' % task.Path)
         print('Last Run   : %s' % task.LastRunTime)
         print('Last Result: %s' % task.LastTaskResult)
@@ -76,6 +79,7 @@ while folders:
             taskNamePart = str.split(task.Name, '_')[1]
             taskDate = datetime.strptime(taskNamePart, '%Y%m%d-%H%M')
             if taskDate.timestamp() < datetime.now().timestamp():
+                logger.info(f'Removing old event: {task.Name} from folder "{folder.Name}"')
                 folder.DeleteTask(task.Name, 0)
 
 
@@ -87,14 +91,36 @@ calendar = Calendar(requests.get(calendar_url).text)
 
 # TODO Delete any event that no longer has a calendar entry
 
-def add_task(event):
-    # Extract the necessary information from the event
-    summary = 'LoadShedding_' + event.begin.strftime('%Y%m%d-%H%M')
-    start_time = event.begin - timedelta(minutes=5)
-    end_time = event.end
-    description = event.description
 
-    print(event.begin - timedelta(minutes=5))
+def remove_emojis(data):
+    emoj = re.compile("["
+        u"\U0001F600-\U0001F64F"  # emoticons
+        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+        u"\U0001F680-\U0001F6FF"  # transport & map symbols
+        u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+        u"\U00002500-\U00002BEF"  # chinese char
+        u"\U00002702-\U000027B0"
+        u"\U00002702-\U000027B0"
+        u"\U000024C2-\U0001F251"
+        u"\U0001f926-\U0001f937"
+        u"\U00010000-\U0010ffff"
+        u"\u2640-\u2642" 
+        u"\u2600-\u2B55"
+        u"\u200d"
+        u"\u23cf"
+        u"\u23e9"
+        u"\u231a"
+        u"\ufe0f"  # dingbats
+        u"\u3030"
+                      "]+", re.UNICODE)
+    return re.sub(emoj, '', data)
+
+
+def add_task(event, tzinfo):
+    summary = 'LoadShedding_' + event.begin.strftime('%Y%m%d-%H%M')
+    start_time = event.begin.datetime.astimezone(local_tz) - timedelta(minutes=5)
+    end_time = event.end.datetime.astimezone(local_tz)
+    clean_event_name = remove_emojis(event.name)
 
     # Create a new Task Scheduler object
     scheduler = win32com.client.Dispatch("Schedule.Service")
@@ -116,7 +142,7 @@ def add_task(event):
 
     # Create a new Task Definition
     task_definition = scheduler.NewTask(0)
-    task_definition.RegistrationInfo.Description = f'{event.name} from {event.begin.strftime("%H:%M")} to {event.end.strftime("%H:%M")}'
+    task_definition.RegistrationInfo.Description = f'{clean_event_name} from {start_time.strftime("%H:%M")} to {end_time.strftime("%H:%M")}'
     task_definition.Settings.Enabled = True
     task_definition.Settings.StartWhenAvailable = True
     task_definition.Settings.Hidden = False
@@ -130,50 +156,22 @@ def add_task(event):
     # Create a new Action for the Task
     action = task_definition.Actions.Create(0)
     action.Path = task_program_path
-    action.Arguments = task_program_arguments
+    action.Arguments = f'"{clean_event_name} from {start_time.strftime("%H:%M")} to {end_time.strftime("%H:%M")}"'
+    if task_program_arguments != '':
+        action.Arguments = task_program_arguments.replace('_eventname_', clean_event_name).replace('_eventstart_', start_time.strftime("%H:%M")).replace('_eventend_', end_time.strftime("%H:%M"))
 
     # Save the Task
     tasks_folder.RegisterTaskDefinition(summary, task_definition, 6, None, None, 3)
 
-
-# folders = [scheduler.GetFolder('\\')]
-# while folders:
-#     folder = folders.pop(0)
-#     folders += list(folder.GetFolders(0))
-#     for task in folder.GetTasks(0):
-#         print('Name       : %s' % task.Name)
-#         print('Path       : %s' % task.Path)
-#         print('Last Run   : %s' % task.LastRunTime)
-#         print('Last Result: %s' % task.LastTaskResult)
-#         match = re.search('LoadShedding(_[0-9]{8}-[0-9]{4})', task.Name)
-#         if match:
-#             taskNamePart = str.split(task.Name, '_')[1]
-#             taskDate = datetime.strptime(taskNamePart, '%Y%m%d-%H%M')
-#             if taskDate.timestamp() > datetime.now().timestamp():
-#                 # get the folder to delete the task from
-#                 #task_folder = scheduler.GetFolder(task.Path)
-#                 f = scheduler.GetFolder(task.Path)
-#                 f.DeleteTask(task.Name, 0)
-
-
-
-
-# Add a scheduled task for each event in the calendar
-# for component in calendar.subcomponents:
-#     if component.name == 'VEVENT':
-#         add_task(component)
+now = datetime.now()
+local_now = now.astimezone()
+local_tz = local_now.tzinfo
 
 # TODO Delete this
 # Loop through events to test
 for event in calendar.events:
-    if event.begin.timestamp() > datetime.now().timestamp():
-        add_task(event)
-        print(event.description)
-        print(event.categories)
-        print(event.extra)
-        print(event.name)
-        print(str(event.begin) + ' to ' + str(event.end))
-
+    if event.end.datetime.astimezone(local_tz).timestamp() > datetime.now().astimezone(local_tz).timestamp():
+        add_task(event, local_tz)
 
 def getOldTasks():
     #scheduler.Connect()
@@ -192,50 +190,3 @@ def getOldTasks():
                 taskDate = datetime.strptime(taskNamePart, '%Y%m%d-%H%M')
                 if taskDate.timestamp() < datetime.now().timestamp():
                     folder.DeleteTask(task.Name, 0)
-
-
-
-
-
-########### EXAMPLE CODE ##########
-task_def = scheduler.NewTask(0)
-
-# Defining the Start time of job
-start_time = datetime.now() + datetime.date.timedelta(minutes=1)
-
-# For Daily Trigger set this variable to 2 ; for One time run set this value as 1
-TASK_TRIGGER_DAILY = 1
-trigger = task_def.Triggers.Create(TASK_TRIGGER_DAILY)
-
-#Repeat for a duration of number of day
-num_of_days = 10
-trigger.Repetition.Duration = "P"+str(num_of_days)+"D"
-
-#use PT2M for every 2 minutes, use PT1H for every 1 hour
-trigger.Repetition.Interval = "PT2M"
-trigger.StartBoundary = start_time.isoformat()
-
-# Create action
-TASK_ACTION_EXEC = 0
-action = task_def.Actions.Create(TASK_ACTION_EXEC)
-action.ID = 'TRIGGER BATCH'
-action.Path = 'cmd.exe'
-action.Arguments ='/c start "" "C:\\Ajay\\Desktop\\test.bat"'
-
-# Set parameters
-task_def.RegistrationInfo.Description = 'Test Task'
-task_def.Settings.Enabled = True
-task_def.Settings.StopIfGoingOnBatteries = False
-
-# Register task
-# If task already exists, it will be updated
-TASK_CREATE_OR_UPDATE = 6
-TASK_LOGON_NONE = 0
-root_folder.RegisterTaskDefinition(
-    'Test Task',  # Task name
-    task_def,
-    TASK_CREATE_OR_UPDATE,
-    '',  # No user
-    '',  # No password
-    TASK_LOGON_NONE
-)
