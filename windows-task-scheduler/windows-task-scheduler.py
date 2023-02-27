@@ -24,6 +24,7 @@ from dateutil.tz import gettz
 #pip install requests
 #pip install icalendar
 
+# create the log file in the working directory
 log_path = os.path.join(str(pathlib.Path(__file__).parent.absolute()), str(os.path.basename(__file__).replace('.py', '.log')))
 logging.basicConfig(filename=log_path, encoding='utf-8', level=logging.DEBUG, format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
 # create logger
@@ -45,100 +46,73 @@ logger.addHandler(ch)
 
 
 
-#config
+# load the config file
 config_path = pathlib.Path(__file__).parent.absolute() / "config.ini"
 logger.info(f'using config: "{str(config_path)}"')
 config = configparser.ConfigParser()
 config.read(config_path)
 
-
 tasks_folder_name = config['TaskScheduler']['tasks_folder']
+task_name_prefix  = config['TaskScheduler']['tasks_name']
 calendar_url = config['TaskScheduler']['calendar_url']
 task_program_path = config['TaskScheduler']['task_program_path']
 task_program_arguments = config['TaskScheduler']['task_program_arguments']
 task_working_directory  = config['TaskScheduler']['task_working_directory']
+task_start_time_offset  = config['TaskScheduler']['task_start_time_offset']
 
+task_offset_hours = 0
+task_offset_minutes = 0
+task_offset_seconds = 0
+task_offset_parts = task_start_time_offset.split(':')
+if len(task_offset_parts) > 0:
+    task_offset_hours = int(task_offset_parts[0])
+    if len(task_offset_parts) > 1:
+        task_offset_minutes = int(task_offset_parts[1])
+        if len(task_offset_parts) > 2:
+            task_offset_seconds = int(task_offset_parts[2])
 
-def sendMessage(title, text):
-    if title == '':
-        title = os.path.basename(__file__)
-        
-    payload = {
-        'tag': 'butler',
-        'title': title,
-        'body': text,
-        'type': 'info'
-    }
+# load the calendar
+calendar = Calendar(requests.get(calendar_url).text)
 
-    headers = {'content-type': 'application/json', 'Accept-Charset': 'UTF-8'}
-    req = requests.post(
-        url="https://apprise.mediaservarr.co.za/notify/default",
-        json = payload,
-        headers=headers
-    )
+now = datetime.now()
+local_now = now.astimezone()
+local_tz = local_now.tzinfo
 
+# array to store valid events
 schedules = []
 
-# Windows Task Scheduler
+# Initialise Windows Task Scheduler
 scheduler = win32com.client.Dispatch('Schedule.Service')
 scheduler.Connect()
 root_folder = scheduler.GetFolder('\\')
 
-# TODO Delete all past / expired events
-folders = [scheduler.GetFolder('\\')]
-while folders:
-    folder = folders.pop(0)
-    folders += list(folder.GetFolders(0))
-    for task in folder.GetTasks(0):
-        #logger.info('Name       : %s' % task.Name)
-        print('Path       : %s' % task.Path)
-        print('Last Run   : %s' % task.LastRunTime)
-        print('Last Result: %s' % task.LastTaskResult)
-        match = re.search('LoadShedding(_[0-9]{8}-[0-9]{4})', task.Name)
-        if match:
-            taskNamePart = str.split(task.Name, '_')[1]
-            taskDate = datetime.strptime(taskNamePart, '%Y%m%d-%H%M')
-            if taskDate.timestamp() < datetime.now().timestamp():
-                logger.info(f'Removing old event: {task.Name} from folder "{folder.Name}"')
-                sendMessage('', f'Removing old event: {task.Name} from folder "{folder.Name}"')
-                folder.DeleteTask(task.Name, 0)
+if task_name_prefix.endswith('_'):
+    task_name_prefix = task_name_prefix[:-1]
 
-
-# TODO Create tasks for future events
-
-# Retrieve the calendar
-# url = "https://github.com/beyarkay/eskom-calendar/releases/download/latest/gauteng-ekurhuleni-block-3.ics"
-calendar = Calendar(requests.get(calendar_url).text)
-
-# TODO Delete any event that no longer has a calendar entry
-
-
-def oldAndNewTasks():
+# delete historical events as well as future events that don't exist anymore
+def deleteTasks():
+    task_name = task_name_prefix + '(_[0-9]{8}-[0-9]{4})'
+    regex_format = r'{}'.format(task_name)
+    regex_pattern = re.compile(regex_format)  
     folders = [scheduler.GetFolder('\\')]
     while folders:
         folder = folders.pop(0)
         folders += list(folder.GetFolders(0))
         for task in folder.GetTasks(0):
-            logger.info('Name       : %s' % task.Name)
-            print('Path       : %s' % task.Path)
-            print('Last Run   : %s' % task.LastRunTime)
-            print('Last Result: %s' % task.LastTaskResult)
-            match = re.search('LoadShedding(_[0-9]{8}-[0-9]{4})', task.Name)
+            match = re.search(regex_pattern, task.Name)
             if match:
                 taskNamePart = str.split(task.Name, '_')[1]
                 taskDate = datetime.strptime(taskNamePart, '%Y%m%d-%H%M')
                 if taskDate.timestamp() < datetime.now().timestamp():
                     logger.info(f'Removing old event: {task.Name} from folder "{folder.Name}"')
-                    sendMessage('', f'Removing old event: {task.Name} from folder "{folder.Name}"')
                     folder.DeleteTask(task.Name, 0)
                 elif taskDate.timestamp() > datetime.now().timestamp():
                     if len(schedules) > 0 and not contains(schedules, task.Name):
                         logger.info(f'Removing future event: {task.Name} from folder "{folder.Name}"')
-                        sendMessage('', f'Removing future event: {task.Name} from folder "{folder.Name}"')
                         folder.DeleteTask(task.Name, 0)
 
 
-def remove_emojis(data):
+def cleanText(data):
     emoj = re.compile("["
         u"\U0001F600-\U0001F64F"  # emoticons
         u"\U0001F300-\U0001F5FF"  # symbols & pictographs
@@ -167,13 +141,12 @@ def contains(array, value):
             return True
     return False
 
-def add_task(event, tzinfo):
-  
+def add_task(event):
     start_time = event.begin.datetime.astimezone(local_tz)
-    task_start_time = event.begin.datetime.astimezone(local_tz) - timedelta(minutes=7)
+    task_start_time = event.begin.datetime.astimezone(local_tz) - timedelta(hours=task_offset_hours) - timedelta(minutes=task_offset_minutes) - timedelta(seconds=task_offset_seconds)
     end_time = event.end.datetime.astimezone(local_tz)
-    summary = 'LoadShedding_' + start_time.strftime('%Y%m%d-%H%M')
-    clean_event_name = remove_emojis(event.name)
+    summary = f'{task_name_prefix}_{start_time.strftime("%Y%m%d-%H%M")}'
+    clean_event_name = cleanText(event.name)
 
     # Create a new Task Scheduler object
     scheduler = win32com.client.Dispatch("Schedule.Service")
@@ -209,43 +182,19 @@ def add_task(event, tzinfo):
     # Create a new Action for the Task
     action = task_definition.Actions.Create(0)
     action.Path = task_program_path
-    action.Arguments = f'"{clean_event_name} from {start_time.strftime("%H:%M")} to {end_time.strftime("%H:%M")}"'
+    action.Arguments = task_program_arguments.replace('_eventname_', clean_event_name).replace('_eventstart_', start_time.strftime("%H:%M")).replace('_eventend_', end_time.strftime("%H:%M"))
     action.WorkingDirectory = task_working_directory 
-    if task_program_arguments != '':
-        action.Arguments = task_program_arguments.replace('_eventname_', clean_event_name).replace('_eventstart_', start_time.strftime("%H:%M")).replace('_eventend_', end_time.strftime("%H:%M"))
 
     # Save the Task
     tasks_folder.RegisterTaskDefinition(summary, task_definition, 6, None, None, 3)
     schedules.append(summary)
     logger.info(f'Created {summary}')
-    sendMessage(f'Created {summary}', f'{event.name}\n{task_start_time.strftime("%d/%m/%Y")} from {start_time.strftime("%H:%M")} to {end_time.strftime("%H:%M")}\nSource: {calendar_url}')
 
-now = datetime.now()
-local_now = now.astimezone()
-local_tz = local_now.tzinfo
 
-# TODO Delete this
-# Loop through events to test
+# create Task scheduler tasks for future events
 for event in calendar.events:
     if event.end.datetime.astimezone(local_tz).timestamp() > datetime.now().astimezone(local_tz).timestamp():
-        add_task(event, local_tz)
+        add_task(event)
 
-oldAndNewTasks()
-
-#def getOldTasks():
-#    #scheduler.Connect()
-#    folders = [scheduler.GetFolder('\\')]
-#    while folders:
-#        folder = folders.pop(0)
-#        folders += list(folder.GetFolders(0))
-#        for task in folder.GetTasks(0):
-#            print('Name       : %s' % task.Name)
-#            print('Path       : %s' % task.Path)
-#            print('Last Run   : %s' % task.LastRunTime)
-#            print('Last Result: %s' % task.LastTaskResult)
-#            match = re.search('LoadShedding(_[0-9]{8}-[0-9]{4})', task.Name)
-#            if match:
-#                taskNamePart = str.split(task.Name, '_')[1]
-#                taskDate = datetime.strptime(taskNamePart, '%Y%m%d-%H%M')
-#                if taskDate.timestamp() < datetime.now().timestamp():
-#                    folder.DeleteTask(task.Name, 0)
+# delete all other tasks that are no longer valid or have been removed from the calendar
+deleteTasks()
